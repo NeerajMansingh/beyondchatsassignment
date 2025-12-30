@@ -89,3 +89,37 @@ app.listen(port, () => {
   console.log(`Example app listening on port ${port}`)
 })
 
+
+// (create) Add a new article manually
+app.post('/articles', async (req, res) => {
+    const { title, author, body } = req.body;
+    if (!title || !body) {
+        return res.status(400).send({ error: "Title and Body are required" });
+    }
+    
+    try {
+        const result = await db.run(
+            "INSERT INTO articles (title, author, body) VALUES (?, ?, ?)", 
+            [title, author || 'Unknown', body]
+        );
+        res.status(201).send({ 
+            message: "Article created", 
+            id: result.lastID 
+        });
+    } catch (error) {
+        res.status(500).send({ error: error.message });
+    }
+});
+
+// (delete) Remove an article
+app.delete('/articles/:id', async (req, res) => {
+    try {
+        const result = await db.run("DELETE FROM articles WHERE id = ?", req.params.id);
+        if (result.changes === 0) {
+            return res.status(404).send({ error: "Article not found" });
+        }
+        res.send({ message: "Article deleted successfully" });
+    } catch (error) {
+        res.status(500).send({ error: error.message });
+    }
+});
