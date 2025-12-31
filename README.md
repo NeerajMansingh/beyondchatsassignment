@@ -266,6 +266,14 @@ beyondchats-assignment/
 * LLM-powered content enhancement
 * Clean Markdown output for publishing
 * Fully local, easy-to-run setup
+  
+---
+## Images
+<img width="1837" height="1046" alt="image" src="https://github.com/user-attachments/assets/54b42188-20d4-4e20-96be-2a68fd5c9544" />
+
+<img width="1837" height="1046" alt="image" src="https://github.com/user-attachments/assets/6aa041e6-abbe-4833-bbe7-c6b2f6753179" />
+
+
 
 ---
 
