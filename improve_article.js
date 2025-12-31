@@ -2,16 +2,19 @@ import express from 'express'
 import * as cheerio from 'cheerio';
 import axios from 'axios';
 import dotenv from 'dotenv'
+import Groq from "groq-sdk";
 
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 dotenv.config({ path: '.env' })
-
-
 const app = express()
 const port = 4000
 
 const SEARCH_ENGINE_ID = process.env.SEARCH_ENGINE_ID; 
 
-const AXIOS_OPTIONS = {   //To disguise web scrapper as browser
+// Initialized Groq
+const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+
+const AXIOS_OPTIONS = {   
   headers: {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
@@ -19,12 +22,8 @@ const AXIOS_OPTIONS = {   //To disguise web scrapper as browser
 };
 
 app.get('/improve', async(req, res) => {
-  const beyondchats_articles=[];   //[{id,title},...]  array of objects 
+  const beyondchats_articles=[];   
   const competitiors_articles=[];
-
-//   console.log("Debug Keys:");
-// console.log("API KEY:", process.env.GOOGLE_API_KEY ? "Loaded" : "MISSING!");
-// console.log("CX ID:", process.env.SEARCH_ENGINE_ID ? "Loaded" : "MISSING!");
 
   for(let i=1;i<=5;i++)
   {
@@ -32,25 +31,30 @@ app.get('/improve', async(req, res) => {
         const temp=await axios.get(`http://localhost:3000/articles/${i}`);
         const temp_title=temp.data.title;
         const temp_id=temp.data.id;
-        beyondchats_articles.push({temp_id,temp_title});
+        const temp_body = temp.data.body;
+        beyondchats_articles.push({temp_id,temp_title,temp_body});
     } catch(e) { console.log("Skipped ID " + i); } 
   }
 
   for(let i in beyondchats_articles) 
   {
     const temp_data={};
-    const title_id=beyondchats_articles[i].temp_id; //must match the key pushed above: temp_id
-    const title_query=beyondchats_articles[i].temp_title; //must match key: temp_title
+    const title_id=beyondchats_articles[i].temp_id; 
+    const title_query=beyondchats_articles[i].temp_title; 
     
     //use the google URL
     const google_url = `https://www.googleapis.com/customsearch/v1?key=${process.env.GOOGLE_API_KEY}&cx=${SEARCH_ENGINE_ID}&q=${encodeURIComponent(title_query)}`;
     
+    await delay(1500)
+
     try { 
         const google_data= await axios.get(google_url);
-        const google_aritcles_items=google_data.data.items || []; //safety check
+        const google_aritcles_items=google_data.data.items || []; 
         temp_data.id=title_id;
-        temp_data.original_title=title_query; 
-        temp_data.competitors = []; //array to store the 2 results
+        temp_data.original_title=title_query;
+        temp_data.original_body = beyondchats_articles[i].temp_body;
+        
+        temp_data.competitors = []; 
 
         if(google_aritcles_items.length==0)
         {
@@ -62,11 +66,9 @@ app.get('/improve', async(req, res) => {
 
         for(let j in google_aritcles_items)
         {
-        //check if link contains 'beyondchats', don't compare link to title
         if(google_aritcles_items[j].link.includes('beyondchats.com')) continue; 
         if(counter == 2) break;
 
-        // push the data needed (Link, Title, Snippet)
         temp_data.competitors.push({ 
             link: google_aritcles_items[j].link, 
             title: google_aritcles_items[j].title,
@@ -112,8 +114,69 @@ app.get('/improve', async(req, res) => {
       console.log("unable to scrape");
     }
   }
+
+  // AI SECTION (GROQ)
+  for(let i in competitiors_articles) 
+  { 
+    const article = competitiors_articles[i]; 
+    console.log(`\n=== Processing Article ID: ${article.id} ===`); 
+
+    let success = false;
+    let attempts = 0;
+
+    while(!success && attempts < 3) {
+        attempts++;
+        try { 
+           const comp1_text = article.competitors[0]?.llmtext || ""; 
+           const comp2_text = article.competitors[1]?.llmtext || ""; 
+           
+           console.log(`  -> Attempt ${attempts}: Sending to Groq (Llama-3.3)...`);
+
+           const prompt = `Rewrite the following article to be more detailed.
+           Original Title: ${article.original_title}
+           Original Content: ${article.original_body}
+           
+           Competitor 1 Content: ${comp1_text.substring(0, 6000)}
+           Competitor 2 Content: ${comp2_text.substring(0, 6000)}
+           
+           INSTRUCTIONS:
+           1. Maintain professional tone.
+           2. Add "References" at the bottom.
+           3. Return ONLY the new article text.`; 
+
+           // [CHANGED] Updated to the currently active model
+           const completion = await groq.chat.completions.create({
+                messages: [{ role: "user", content: prompt }],
+                model: "llama-3.3-70b-versatile", 
+           });
+
+           const new_content = completion.choices[0]?.message?.content || ""; 
+           
+           await axios.put(`http://localhost:3000/articles/${article.id}`, { 
+               body: new_content 
+           }); 
+           
+           console.log("Database Updated."); 
+           success = true; 
+
+           console.log("Cooldown: Waiting 25 seconds...");
+           await delay(25000);
+
+        } catch(e) { 
+           console.log(`Error on Attempt ${attempts}: ` + e.message); 
+           
+           if(e.message.includes("429")) {
+              console.log("Rate Limit! Groq allows ~30 requests/min. Waiting 60s...");
+              await delay(60000); 
+           } else {
+              console.log("Non-recoverable error. Skipping.");
+              break; 
+           }
+        } 
+    }
+  }
   
-  res.json(competitiors_articles); //to see the output in browser
+  res.json(competitiors_articles); 
 })
 
 app.listen(port, () => {
