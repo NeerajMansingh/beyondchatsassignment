@@ -1,13 +1,19 @@
 import express from 'express'
-import * as cheerio from 'cheerio';
+import * as cheerio from 'cheerio';  //using cheerio for web scrapping
 import axios from 'axios';
 import dotenv from 'dotenv'
 import Groq from "groq-sdk";
+import cors from 'cors';
+
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 dotenv.config({ path: '.env' })
 const app = express()
 const port = 4000
+
+app.use(cors()); 
+app.use(express.json());
+
 
 const SEARCH_ENGINE_ID = process.env.SEARCH_ENGINE_ID; 
 
@@ -25,15 +31,26 @@ app.get('/improve', async(req, res) => {
   const beyondchats_articles=[];   
   const competitiors_articles=[];
 
-  for(let i=1;i<=5;i++)
+  //Fetch all articles first to handle ID gaps safely
+  const allArticlesResponse = await axios.get(`http://localhost:3000/articles`);
+  const allArticles = allArticlesResponse.data;
+
+  for(let articleData of allArticles)
   {
     try { 
-        const temp=await axios.get(`http://localhost:3000/articles/${i}`);
-        const temp_title=temp.data.title;
-        const temp_id=temp.data.id;
-        const temp_body = temp.data.body;
-        beyondchats_articles.push({temp_id,temp_title,temp_body});
-    } catch(e) { console.log("Skipped ID " + i); } 
+        // You already have 'articleData', just use it directly!
+        const temp_title = articleData.title;
+        const temp_id = articleData.id;
+        
+        // Read from 'original_body' if available, fallback to 'body'
+        const temp_body = articleData.original_body || articleData.body;
+        
+        beyondchats_articles.push({ 
+            temp_id, 
+            temp_title, 
+            temp_body 
+        });
+    } catch(e) { console.log("Skipped ID"); } 
   }
 
   for(let i in beyondchats_articles) 
@@ -132,7 +149,9 @@ app.get('/improve', async(req, res) => {
            
            console.log(`  -> Attempt ${attempts}: Sending to Groq (Llama-3.3)...`);
 
-           const prompt = `Rewrite the following article to be more detailed.
+           //prompt
+           const prompt = `Rewrite the following article to be detailed, comprehensive, and well-structured using Markdown.
+           
            Original Title: ${article.original_title}
            Original Content: ${article.original_body}
            
@@ -140,11 +159,11 @@ app.get('/improve', async(req, res) => {
            Competitor 2 Content: ${comp2_text.substring(0, 6000)}
            
            INSTRUCTIONS:
-           1. Maintain professional tone.
-           2. Add "References" at the bottom.
-           3. Return ONLY the new article text.`; 
+           1. Use proper Markdown formatting (# Headings, **bold**, bullet points).
+           2. Make the content significantly more detailed than the original.
+           3. Add a "References" section at the very bottom.
+           4. Return ONLY the new article text.`; 
 
-           // [CHANGED] Updated to the currently active model
            const completion = await groq.chat.completions.create({
                 messages: [{ role: "user", content: prompt }],
                 model: "llama-3.3-70b-versatile", 
@@ -152,11 +171,12 @@ app.get('/improve', async(req, res) => {
 
            const new_content = completion.choices[0]?.message?.content || ""; 
            
+           //Send 'ai_body'
            await axios.put(`http://localhost:3000/articles/${article.id}`, { 
-               body: new_content 
+               ai_body: new_content 
            }); 
            
-           console.log("Database Updated."); 
+           console.log("Database Updated (AI Version Saved)."); 
            success = true; 
 
            console.log("Cooldown: Waiting 25 seconds...");
@@ -180,5 +200,5 @@ app.get('/improve', async(req, res) => {
 })
 
 app.listen(port, () => {
-  console.log(`Example app 2 listening on port ${port}`)
+  console.log(`AI Worker listening on port ${port}`)
 })
